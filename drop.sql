@@ -1,0 +1,4 @@
+DROP TABLE Salaire;
+DROP TABLE Employe CASCADE;
+DROP TABLE Postes;
+DROP TABLE Departements;
