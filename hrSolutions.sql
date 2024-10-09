@@ -399,7 +399,7 @@ CREATE INDEX IF NOT EXISTS idx_fullName
 ON Employe (nom, prenom);
 
 
--- PlPgSQL (FONCTION, PROCEDURE, TRIGGER)
+-- PL/pgSQL (FONCTION, PROCEDURE, TRIGGER)
 
 /*
     11. Écrivez un script PL/pgSQL qui tente d'insérer un employé avec un numéro de téléphone
