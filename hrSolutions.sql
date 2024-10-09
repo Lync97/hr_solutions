@@ -51,11 +51,12 @@ CREATE TABLE IF NOT EXISTS Employe(
 CREATE TABLE IF NOT EXISTS Salaire(
     id SERIAL,
     idEmploye INT NOT NULL,
-    montant DECIMAL(10,2),
+    montant DECIMAL(10,2) NOT NULL,
     dateDebut DATE DEFAULT CURRENT_DATE,
-    dateFin DATE NOT NULL,
+    dateFin DATE,
     CONSTRAINT pk_Salaire PRIMARY KEY(id),
-    CONSTRAINT fk_Salaire_idEmploye FOREIGN KEY(idEmploye) REFERENCES Employe(id)
+    CONSTRAINT fk_Salaire_idEmploye FOREIGN KEY(idEmploye) REFERENCES Employe(id),
+    CONSTRAINT check_dates CHECK (dateFin > dateDebut)
 );
 
 
@@ -396,3 +397,224 @@ END;
 */
 CREATE INDEX IF NOT EXISTS idx_fullName
 ON Employe (nom, prenom);
+
+
+-- PlPgSQL (FONCTION, PROCEDURE, TRIGGER)
+
+/*
+    11. Écrivez un script PL/pgSQL qui tente d'insérer un employé avec un numéro de téléphone
+    déjà existant et gère l'erreur en renvoyant un message approprié.
+*/
+DO $$
+DECLARE
+    emp_idPoste INT := 1;  -- ID du poste (modifiable selon vos besoins)
+    emp_nom TEXT := 'Dupont';
+    emp_prenom TEXT := 'Jean';
+    emp_sexe CHAR(1) := 'M';
+    emp_tel TEXT := '0123456789';  -- Numéro de téléphone existant
+    emp_email TEXT := 'jean.dupont@example.com';
+    emp_dateNaissance DATE := '1985-06-15';
+    emp_dateEmbauche DATE := '2023-01-01';
+BEGIN
+    -- Tenter d'insérer un nouvel employé
+    INSERT INTO Employe (idPoste, nom, prenom, sexe, tel, email, dateNaissance, dateEmbauche)
+    VALUES (emp_idPoste, emp_nom, emp_prenom, emp_sexe, emp_tel, emp_email, emp_dateNaissance, emp_dateEmbauche);
+    
+    RAISE NOTICE 'Employé ajouté avec succès.';
+
+EXCEPTION
+    WHEN unique_violation THEN  -- Capturer l'erreur de violation de contrainte unique
+        RAISE NOTICE 'Erreur : Le numéro de téléphone % existe déjà.', emp_tel;
+    WHEN OTHERS THEN  -- Gérer d'autres erreurs potentielles
+        RAISE NOTICE 'Erreur : %', SQLERRM;
+END $$;
+
+
+-- 12. Créez une fonction qui prend un id d'employé et retourne son nom complet (nom et prénom concaténés).
+CREATE OR REPLACE FUNCTION emp_fullname(ide INTEGER)
+RETURNS TEXT
+LANGUAGE PLPGSQL AS
+$$
+    DECLARE
+        fullname TEXT;
+    BEGIN
+        SELECT
+            nom || ' ' || prenom AS "Nom employe" INTO fullname
+        FROM
+            Employe
+        WHERE id=ide;
+
+        RETURN fullname;
+    END;
+$$;
+
+/*
+    13. Créez une procédure stockée qui ajoute un nouvel employé et son salaire dans une transaction,
+    et qui renvoie l'id de l'employé nouvellement créé.
+*/
+CREATE OR REPLACE PROCEDURE ajouter_employe_salaire(
+    emp_idPoste Employe.idPoste%TYPE,
+    emp_nom Employe.nom%TYPE,
+    emp_prenom Employe.prenom%TYPE,
+    emp_sexe Employe.sexe%TYPE,
+    emp_tel Employe.tel%TYPE,
+    emp_email Employe.email%TYPE,
+    emp_dateNaissance Employe.dateNaissance%TYPE,
+    emp_dateEmbauche Employe.dateEmbauche%TYPE,
+    sal_montant Salaire.montant%TYPE,
+    sal_dateFin Salaire.dateFin%TYPE,
+    OUT new_emp_id INT
+)
+LANGUAGE PLPGSQL AS
+$$
+    DECLARE
+        v_emp_id INT;
+    BEGIN
+        BEGIN
+            -- Insertion dans la table Employe
+            INSERT INTO Employe (
+                idPoste, nom, prenom, sexe, tel,
+                email, dateNaissance, dateEmbauche
+            ) VALUES (
+                emp_idPoste, emp_nom, emp_prenom, emp_sexe, emp_tel,
+                emp_email, emp_dateNaissance, emp_dateEmbauche
+            )
+            RETURNING id INTO v_emp_id;
+
+            -- Insertion dans la table Salaire  
+            INSERT INTO Salaire (
+                idEmploye, montant, dateDebut, dateFin)
+            VALUES (
+                v_emp_id, sal_montant, CURRENT_DATE, sal_dateFin
+            );
+            new_emp_id := v_emp_id;
+
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- Gestion des erreurs
+                ROLLBACK;
+                RAISE EXCEPTION 'Erreur lors de l''ajout de l''employé et du salaire : %', SQLERRM;
+        END;
+    END;
+$$;
+
+-- Appel a la procedure ajouter_employe_salaire
+DO $$
+DECLARE
+    v_new_emp_id INT;
+BEGIN
+    CALL ajouter_employe_salaire(
+        1,  -- idPoste
+        'cajuste',  -- nom
+        'manolas',  -- prénom
+        'M',  -- sexe
+        '0123456789',  -- téléphone
+        'cajustemanolas@gmail.com',  -- email
+        '1985-06-15',  -- date de naissance
+        '2023-01-01',  -- date d'embauche
+        2500.00,  -- montant du salaire
+        '2023-12-31',  -- date de fin du salaire
+        v_new_emp_id  -- variable pour capturer l'ID de l'employé créé
+    );
+    RAISE NOTICE 'Nouvel employé créé avec l''ID : %', v_new_emp_id;
+END $$;
+
+/*
+    Utilisation des triggers
+    14. Créez un trigger qui met à jour automatiquement la colonne "dateFin" dans la table
+    "Salaire" lorsqu'un employé est supprimé.
+*/
+CREATE OR REPLACE FUNCTION update_salary_end_date()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Met à jour la dateFin pour tous les salaires de l'employé supprimé
+    UPDATE Salaire
+    SET dateFin = CURRENT_DATE  -- Met à jour dateFin à la date actuelle
+    WHERE idEmploye = OLD.id;    -- OLD.id fait référence à l'ID de l'employé supprimé
+
+    RETURN OLD;  -- Retourne l'ancien enregistrement (employé supprimé)
+END;
+$$ LANGUAGE plpgsql;
+
+-- Creation du trigger
+CREATE TRIGGER trg_update_salary_end_date
+AFTER DELETE ON Employe
+FOR EACH ROW
+EXECUTE FUNCTION update_salary_end_date();
+
+/*
+    Sécurité et permissions
+    16. Créez un rôle "hr_manager" et accordez-lui les permissions nécessaires pour insérer,
+    mettre à jour et supprimer des employés et des salaires.
+*/
+CREATE ROLE hr_manager;
+
+-- Accordez les permissions sur la table Employe
+GRANT INSERT, UPDATE, DELETE ON TABLE Employe TO hr_manager;
+
+-- Accordez les permissions sur la table Salaire
+GRANT INSERT, UPDATE, DELETE ON TABLE Salaire TO hr_manager;
+
+-- Ajouter un utilisateur precedemment cree au role hr_manager
+GRANT hr_manager TO nom_utilisateur;  
+
+--  Lister les utilisateurs et les roles 
+SELECT grantee, privilege_type
+FROM information_schema.role_table_grants
+WHERE table_name = 'employe' OR table_name = 'salaire';
+
+-- 17. Créez une vue matérialisée qui résume le nombre d'employés et le salaire total par département. Mettez à jour cette vue.
+-- Creation du vue materialisee
+CREATE MATERIALIZED VIEW vue_salaire_par_departement AS
+SELECT 
+    d.nom AS departement,
+    COUNT(e.id) AS nombre_employes,
+    SUM(s.montant) AS salaire_total
+FROM 
+    Departements d
+JOIN 
+    Postes p ON p.idDepartement = d.id 
+JOIN 
+    Employe e ON e.idPoste = p.id
+JOIN 
+    Salaire s ON s.idEmploye = e.id
+GROUP BY 
+    d.nom;
+
+
+-- Creation de la function de mise a jiur de la vue...
+CREATE OR REPLACE FUNCTION mettre_a_jour_vue_salaire_par_departement()
+RETURNS TRIGGER
+LANGUAGE PLPGSQL
+AS $$
+BEGIN
+    -- Rafraîchir la vue matérialisée
+    REFRESH MATERIALIZED VIEW vue_salaire_par_departement;
+
+    RETURN NULL;  -- Un trigger de type AFTER ne doit pas retourner de valeur
+END;
+$$;
+
+
+-- Trigger sur la table Departements
+CREATE TRIGGER trigger_maj_vue_departements
+AFTER INSERT OR UPDATE OR DELETE ON Departements
+FOR EACH STATEMENT EXECUTE FUNCTION mettre_a_jour_vue_salaire_par_departement();
+
+-- Trigger sur la table Postes
+CREATE TRIGGER trigger_maj_vue_postes
+AFTER INSERT OR UPDATE OR DELETE ON Postes
+FOR EACH STATEMENT EXECUTE FUNCTION mettre_a_jour_vue_salaire_par_departement();
+
+-- Trigger sur la table Employe
+CREATE TRIGGER trigger_maj_vue_employe
+AFTER INSERT OR UPDATE OR DELETE ON Employe
+FOR EACH STATEMENT EXECUTE FUNCTION mettre_a_jour_vue_salaire_par_departement();
+
+-- Trigger sur la table Salaire
+CREATE TRIGGER trigger_maj_vue_salaire
+AFTER INSERT OR UPDATE OR DELETE ON Salaire
+FOR EACH STATEMENT EXECUTE FUNCTION mettre_a_jour_vue_salaire_par_departement();
+
+-- Affichage de la vue materialisee
+SELECT * FROM vue_salaire_par_departement;
